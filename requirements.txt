@@ -1,0 +1,15 @@
+langchain-core
+langchain-community
+langchain-openai
+langchain-experimental
+langchain-classic
+langgraph
+chromadb
+faiss-cpu
+unstructured
+pymupdf
+numpy
+python-dotenv
+gradio
+rank-bm25
+sentence-transformers
