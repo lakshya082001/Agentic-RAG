@@ -8,20 +8,19 @@ from src.vectorstore import create_vectorstore
 from src.retrieval import retrieve, hybrid_retrieve
 from src.reranker import rerank
 
-URLS = [
-    "https://www.cms.gov/medicare-coverage-database/view/ncacal-decision-memo.aspx?proposed=N&NCAId=204"
-]
 PDFS_PATH = "./Data"
 
 
 @tool(description="""Search and retrieve relevant documents.
+raw_texts: page contents already fetched (e.g. via an MCP web-search tool). This is the
+primary source now — no fixed URLs are hardcoded, to avoid storing/committing source docs.
 store_type options:
 - 'faiss': fast, URLs or raw text only
 - 'chroma': PDFs with metadata filtering
 - 'chroma_persistent': multi-source, persists across calls
 Auto-selected as faiss if not provided.""")
-def rag_pipeline(user_query: str, store_type: str = "faiss") -> list:
-    print(f"\n[RAG] Tool called | store_type='{store_type}' | query='{user_query}'")
+def rag_pipeline(user_query: str, raw_texts: list[str] = [], store_type: str = "faiss") -> list:
+    print(f"\n[RAG] Tool called | store_type='{store_type}' | query='{user_query}' | sources={len(raw_texts)}")
 
     embedder = OpenAIEmbeddings(
         base_url=os.environ.get("OPENAI_API_BASE"),
@@ -30,7 +29,7 @@ def rag_pipeline(user_query: str, store_type: str = "faiss") -> list:
     )
 
     print("[RAG] 1/4 Ingesting sources...")
-    docs = read_sources(URLS, PDFS_PATH, raw_texts=[])
+    docs = read_sources(urls=[], pdfs_path=PDFS_PATH, raw_texts=raw_texts)
     print(f"[RAG] 1/4 Done — {len(docs)} documents loaded")
 
     print("[RAG] 2/4 Chunking...")

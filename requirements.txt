@@ -4,6 +4,7 @@ langchain-openai
 langchain-experimental
 langchain-classic
 langgraph
+langchain-mcp-adapters
 chromadb
 faiss-cpu
 unstructured
