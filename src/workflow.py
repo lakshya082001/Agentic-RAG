@@ -1,3 +1,5 @@
+import asyncio
+
 from pydantic import BaseModel, Field
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -6,6 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from src.state import ClinicalAgentState
 from src.pipeline import rag_pipeline
 from src.mcp_client import search_and_fetch
+from src.guards import check_input
 
 
 # ---------- structured outputs for the LLM-only nodes ----------
@@ -68,6 +71,19 @@ def build_graph(llm, dt_skill_text: str = ""):
     validator_llm = llm.with_structured_output(ValidatorOutput)
     expert_llm = llm.with_structured_output(ClinicalExpertOutput)
 
+    async def input_guard(state: ClinicalAgentState):
+        text = state["messages"][-1].content
+        ok, scores = check_input(text)
+        if not ok:
+            print(f"[GUARD] Blocked input | scores={scores}")
+            msg = "Sorry, I can't process that request."
+            return {
+                "final_response": msg,
+                "messages": [{"role": "assistant", "content": msg}],
+                "blocked": True,
+            }
+        return {"blocked": False}
+
     async def planner(state: ClinicalAgentState):
         result = planner_llm.invoke(
             [{"role": "system", "content": PLANNER_PROMPT}] + state["messages"]
@@ -90,18 +106,19 @@ def build_graph(llm, dt_skill_text: str = ""):
         msg = f"To look up the prior-authorization guidelines, I still need: {fields}. Could you provide that?"
         return {"final_response": msg, "messages": [{"role": "assistant", "content": msg}]}
 
+    async def run_one(sq: dict):
+        query, qtype = sq["query"], sq["type"]
+        if qtype == "chat":
+            answer = await llm.ainvoke([{"role": "user", "content": query}])
+            return query, answer.content
+        raw_texts = await search_and_fetch(query)
+        docs = await rag_pipeline.ainvoke({"user_query": query, "raw_texts": raw_texts})
+        return query, "\n\n".join(getattr(d, "page_content", str(d)) for d in docs)
+
     async def router(state: ClinicalAgentState):
-        tool_results = {}
-        for sq in state["sub_queries"]:
-            query, qtype = sq["query"], sq["type"]
-            if qtype == "chat":
-                answer = llm.invoke([{"role": "user", "content": query}])
-                tool_results[query] = answer.content
-            else:
-                raw_texts = await search_and_fetch(query)
-                docs = await rag_pipeline.ainvoke({"user_query": query, "raw_texts": raw_texts})
-                tool_results[query] = "\n\n".join(getattr(d, "page_content", str(d)) for d in docs)
-        return {"tool_results": tool_results}
+        # Run all sub-queries (chat + rag/hybrid) concurrently instead of sequentially.
+        pairs = await asyncio.gather(*[run_one(sq) for sq in state["sub_queries"]])
+        return {"tool_results": dict(pairs)}
 
     async def combiner(state: ClinicalAgentState):
         combined = "\n\n".join(f"Q: {q}\n{a}" for q, a in state["tool_results"].items())
@@ -126,7 +143,11 @@ def build_graph(llm, dt_skill_text: str = ""):
     def route_after_validation(state: ClinicalAgentState):
         return "ask_user" if state.get("missing_info") else "router"
 
+    def route_after_guard(state: ClinicalAgentState):
+        return END if state.get("blocked") else "planner"
+
     workflow = StateGraph(ClinicalAgentState)
+    workflow.add_node("input_guard", input_guard)
     workflow.add_node("planner", planner)
     workflow.add_node("validator", validator)
     workflow.add_node("ask_user", ask_user)
@@ -134,7 +155,8 @@ def build_graph(llm, dt_skill_text: str = ""):
     workflow.add_node("combiner", combiner)
     workflow.add_node("clinical_expert", clinical_expert)
 
-    workflow.add_edge(START, "planner")
+    workflow.add_edge(START, "input_guard")
+    workflow.add_conditional_edges("input_guard", route_after_guard, ["planner", END])
     workflow.add_edge("planner", "validator")
     workflow.add_conditional_edges("validator", route_after_validation, ["ask_user", "router"])
     workflow.add_edge("ask_user", END)

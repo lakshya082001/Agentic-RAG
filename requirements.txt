@@ -5,6 +5,7 @@ langchain-experimental
 langchain-classic
 langgraph
 langchain-mcp-adapters
+llm-guard
 chromadb
 faiss-cpu
 unstructured

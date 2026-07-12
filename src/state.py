@@ -11,3 +11,4 @@ class ClinicalAgentState(TypedDict):
     tool_results: dict        # {sub_query_text: result_text}
     final_response: str
     needs_dt: bool
+    blocked: bool             # True if input_guard rejected the message
